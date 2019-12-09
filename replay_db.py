@@ -1,4 +1,4 @@
-import sys, sqlite3, ctypes, struct
+import os, sys, sqlite3, ctypes, struct, collections
 from contextlib import contextmanager
 from typing import List, Any
 
@@ -6,7 +6,10 @@ import rpyc, hexdump
 
 """
 
-Start rpyc_classic on the target like this:
+Replay and fuzz all the entries from the SQLite database.
+
+Target host must have Python3+ + `rpyc` module installed.
+Then simply start `rpyc_classic` on the target like this:
 
 ```
 c:\> rpyc_classic.py --host 0.0.0.0
@@ -18,6 +21,31 @@ GENERIC_READ = 0x80000000
 GENERIC_WRITE = 0x40000000
 OPEN_EXISTING = 3
 
+Irp = collections.namedtuple(
+    "Irp",
+    [
+        "TimeStamp",
+        "IrqLevel",
+        "Type",
+        "IoctlCode",
+        "Status",
+        "ProcessId",
+        "ThreadId",
+        "InputBufferLength",
+        "OutputBufferLength",
+        "DriverName",
+        "DeviceName",
+        "ProcessName",
+        "InputBuffer",
+        "OutputBuffer",
+    ]
+)
+
+def log(x): print(x)
+def dbg(x): log(f"[*] {x}") if DEBUG else None
+def ok(x): log(f"[+] {x}")
+def err(x): log(f"[-] {x}")
+def warn(x): log(f"[!] {x}")
 
 @contextmanager
 def GetDeviceHandle(conn, DeviceName, *args, **kwargs):
@@ -46,33 +74,75 @@ def DeviceIoctlControl(conn, DeviceName, IoctlCode, _in='', _out='', *args, **kw
         #print('Sent %dB to %s with IoctlCode %#x' % (InputBufferSize, DeviceName, IoctlCode ))
         if res:
             if dwBytesReturned:
-                print(hexdump.hexdump(OutputBuffer))
+                ok(hexdump.hexdump(OutputBuffer))
         else:
-            #print( GetLastError(), FormatError(GetLastError()) )
+            #warn( GetLastError(), FormatError(GetLastError()) )
             pass
     return res
 
 
-#def MutateFuzzQword(original_data):
+def MutateFuzzWord(data: bytearray) -> bytearray:
+    if len(data) < 2:
+        return data
 
-
-def Mutate(data):
-    for offset in range(0, len(data), 8):
-        #print("- Fuzzing QWORD at offset %d" % offset)
-        fuzzed_data = bytearray(data)
-        struct.pack_into("<Q", fuzzed_data, offset, 0x4141414141414141)
+    for offset in range(0, len(data), 2):
+        fuzzed_data = data[::]
+        #dbg("Fuzzing WORD at offset %d" % offset)
+        struct.pack_into("<H", fuzzed_data, offset, 0x4141)
+        yield fuzzed_data
+        struct.pack_into("<H", fuzzed_data, offset, 0xffff)
         yield fuzzed_data
 
 
+def MutateFuzzDword(data: bytearray) -> bytearray:
+    if len(data) < 4:
+        return data
+
+    for offset in range(0, len(data), 4):
+        fuzzed_data = data[::]
+        #dbg("Fuzzing DWORD at offset %d" % offset)
+        struct.pack_into("<I", fuzzed_data, offset, 0x41414141)
+        yield fuzzed_data
+        struct.pack_into("<I", fuzzed_data, offset, 0xffffffff)
+        yield fuzzed_data
 
 
-def Fuzz(remote: rpyc.core.protocol.Connection, entry: List[Any]) -> int:
-    DeviceName = entry[10].lower().replace(r"\device", r"\\.") # DeviceName
-    IoctlCode = entry[3] # IoctlCode
-    lpIrpDataOut = b"\x00"*entry[8] # OutputBufferLength
-    for mutated_data in Mutate(entry[12]): # InputBuffer
+def MutateFuzzQword(data: bytearray) -> bytearray:
+    if len(data) < 8:
+        return data
+
+    for offset in range(0, len(data), 8):
+        fuzzed_data = data[::]
+        #dbg("Fuzzing QWORD at offset %d" % offset)
+        struct.pack_into("<Q", fuzzed_data, offset, 0x4141414141414141)
+        yield fuzzed_data
+        struct.pack_into("<Q", fuzzed_data, offset, 0xffffffffffffffff)
+        yield fuzzed_data
+
+
+def MutateFuzzFlipHiBit(data: bytearray):
+    for offset in range(0, len(data)):
+        fuzzed_data = data[::]
+        fuzzed_data[offset] = fuzzed_data[offset] | 0b10000000 if not fuzzed_data[offset] & 0x80 else fuzzed_data[offset] & 0b01111111
+        yield fuzzed_data
+
+
+def Mutate(data: bytes):
+    data = bytearray(data)
+    for out in MutateFuzzQword(data): yield out
+    for out in MutateFuzzDword(data): yield out
+    for out in MutateFuzzWord(data): yield out
+    for out in MutateFuzzFlipHiBit(data): yield out
+
+
+def Fuzz(remote: rpyc.core.protocol.Connection, entry: Irp) -> int:
+    DeviceName = entry.DeviceName.lower().replace(r"\device", r"\\.")
+    IoctlCode = entry.IoctlCode
+    lpIrpDataOut = b"\x00"*entry.OutputBufferLength
+    for mutated_data in Mutate(entry.InputBuffer):
         lpIrpDataIn = bytes(mutated_data)
-        #print(hexdump.hexdump(lpIrpDataIn))
+        #os.system("clear")
+        #hexdump.hexdump(lpIrpDataIn)
         DeviceIoctlControl(remote, DeviceName, IoctlCode, lpIrpDataIn, lpIrpDataOut)
 
 
@@ -81,7 +151,13 @@ def AutoFuzz(conn: rpyc.core.protocol.Connection, db_path: str):
     c = sql.cursor()
     c.execute("SELECT * FROM Irps WHERE Type = 14 AND InputBufferLength > 0")
     for entry in c.fetchall():
-        Fuzz(conn, entry)
+        irp = Irp(*entry)
+        try:
+            Fuzz(conn, irp)
+        except Exception as e:
+            #err("Exception: %s" % str(e))
+            #break
+            pass
     sql.close()
     return
 
@@ -105,5 +181,4 @@ if __name__ == '__main__':
     sqlite_file = sys.argv[1]
     target_fuzz = sys.argv[2]
     conn = Connect(target_fuzz)
-    Test(conn)
     AutoFuzz(conn, sqlite_file)

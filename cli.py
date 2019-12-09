@@ -6,6 +6,7 @@ import sys
 import socket
 import struct
 import datetime
+import hexdump
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.completion import WordCompleter, NestedCompleter
@@ -31,18 +32,6 @@ def convert_GetSystemTime(t: int) -> datetime.datetime:
     """
     unix_ts = (t / 10000000) - 11644473600
     return datetime.datetime.fromtimestamp(unix_ts)
-
-
-
-def hexdump(source:bytearray, length:int=0x10, separator:str=".", base:int=0x00, align:int=10) -> str:
-    result = []
-    for i in range(0, len(source), length):
-        chunk = bytearray(source[i:i + length])
-        hexa = " ".join(["%.02x" % b for b in chunk])
-        text = "".join([chr(b) if 0x20 <= b < 0x7F else separator for b in chunk])
-        msg = "{addr:#0{aw}x}     {data:<{dw}}    {text}".format(aw=align,addr=base+i,dw=3*length,data=hexa,text=text)
-        result.append(msg)
-    return "\n".join(result)
 
 
 
