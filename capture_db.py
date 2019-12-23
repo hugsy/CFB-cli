@@ -303,16 +303,17 @@ def capture(r, driver_list):
     #r.EnumerateDrivers()
     #for driver_name in driver_list: r.HookDriver(driver_name)
 
-    #r.EnableMonitoring()
+    r.EnableMonitoring()
     #ok("EnableMonitoring() success")
 
-    #run_forever()
+    run_forever()
 
     #ok("GetInterceptedIrps() success")
     r.DisableMonitoring()
     #ok("DisableMonitoring() success")
 
-    for driver_name in driver_list: r.UnhookDriver(driver_name)
+    for driver_name in driver_list: 
+        r.UnhookDriver(driver_name)
 
     #ok("UnhookDriver() success")
     r.ClosePipe()
