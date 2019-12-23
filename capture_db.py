@@ -275,8 +275,8 @@ CREATE TABLE IF NOT EXISTS Irps (
             entry["header"]["DriverName"],
             entry["header"]["DeviceName"],
             entry["header"]["ProcessName"],
-            bytearray(entry["body"]["input"]),
-            bytearray(entry["body"]["output"]),
+            bytearray(entry["body"]["InputBuffer"]),
+            bytearray(entry["body"]["OutputBuffer"]),
         ]
         c.execute("INSERT INTO Irps VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", values)
 
