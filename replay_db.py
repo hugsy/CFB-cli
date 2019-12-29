@@ -15,6 +15,7 @@ Then simply start `rpyc_classic` on the target like this:
 c:\> rpyc_classic.py --host 0.0.0.0
 ```
 
+Can fuzz Write or IoctlCtl IRPs.
 """
 
 DEBUG=True
@@ -84,6 +85,17 @@ def DeviceIoctlControl(conn, DeviceName, IoctlCode, _in='', _out='', *args, **kw
     return res
 
 
+def WriteFile(conn, DeviceName, _in='', *args, **kwargs):
+    dwBytesWritten = c_uint32()
+    InputBufferSize = kwargs.get('_inlen', len(_in))
+    InputBuffer = create_string_buffer(InputBufferSize)
+    InputBuffer.value = _in
+    res = -1
+    with GetDeviceHandle(conn, DeviceName) as hDriver:
+        res = kernel32.WriteFile(hDriver, InputBuffer, InputBufferSize, byref(dwBytesWritten), None)
+    return res
+
+
 def MutateFuzzWord(data: bytearray) -> bytearray:
     if len(data) < 2:
         return data
@@ -145,11 +157,11 @@ def Mutate(data: bytes):
             yield out
 
 
-def Fuzz(remote: rpyc.core.protocol.Connection, entry: Irp) -> int:
+def FuzzIoctl(remote: rpyc.core.protocol.Connection, entry: Irp) -> int:
     DeviceName = entry.DeviceName.lower().replace(r"\device", r"\\.")
     IoctlCode = entry.IoctlCode
     lpIrpDataOut = b"\x00"*entry.OutputBufferLength
-    ok("Fuzzing IRP #%d" % (entry.Id,))
+    ok("Fuzzing IOCTL IRP #%d" % (entry.Id,))
     for mutated_data in Mutate(entry.InputBuffer):
         lpIrpDataIn = bytes(mutated_data)
         #os.system("clear")
@@ -157,14 +169,39 @@ def Fuzz(remote: rpyc.core.protocol.Connection, entry: Irp) -> int:
         DeviceIoctlControl(remote, DeviceName, IoctlCode, lpIrpDataIn, lpIrpDataOut)
 
 
-def AutoFuzz(conn: rpyc.core.protocol.Connection, db_path: str):
+def FuzzWrite(remote: rpyc.core.protocol.Connection, entry: Irp) -> int:
+    DeviceName = entry.DeviceName.lower().replace(r"\device", r"\\.")
+    IoctlCode = entry.IoctlCode
+    ok("Fuzzing Write IRP #%d" % (entry.Id,))
+    for mutated_data in Mutate(entry.InputBuffer):
+        lpIrpDataIn = bytes(mutated_data)
+        WriteFile(remote, DeviceName, lpIrpDataIn)
+
+
+def AutoFuzzIoctl(conn: rpyc.core.protocol.Connection, db_path: str) -> None:
     sql = sqlite3.connect(db_path)
     c = sql.cursor()
     c.execute("SELECT * FROM Irps WHERE Type = 14 AND InputBufferLength > 0")
     for i, entry in enumerate(c.fetchall()):
         irp = Irp(i, *entry)
         try:
-            Fuzz(conn, irp)
+            FuzzIoctl(conn, irp)
+        except Exception as e:
+            err("Exception: %s" % str(e))
+            #break
+            pass
+    sql.close()
+    return
+
+
+def AutoFuzzWrite(conn: rpyc.core.protocol.Connection, db_path: str) -> None:
+    sql = sqlite3.connect(db_path)
+    c = sql.cursor()
+    c.execute("SELECT * FROM Irps WHERE Type = 4 AND InputBufferLength > 0")
+    for i, entry in enumerate(c.fetchall()):
+        irp = Irp(i, *entry)
+        try:
+            FuzzWrite(conn, irp)
         except Exception as e:
             err("Exception: %s" % str(e))
             #break
@@ -192,4 +229,5 @@ if __name__ == '__main__':
     sqlite_file = sys.argv[1]
     target_fuzz = sys.argv[2]
     conn = Connect(target_fuzz)
-    AutoFuzz(conn, sqlite_file)
+    #AutoFuzzIoctl(conn, sqlite_file)
+    AutoFuzzWrite(conn, sqlite_file)
