@@ -76,7 +76,7 @@ class Session:
     def connect(self) -> bool:
         self.hSock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            self.hSock.connect(self.host, self.port)
+            self.hSock.connect((self.host, self.port))
             return True
         except socket.error:
             return False
@@ -136,8 +136,8 @@ def main(host: str, port: int) -> None:
 
 if __name__ == '__main__':
     if len(sys.argv) != 3:
-        host, port = "10.0.0.63", 1337
+        host, port = ("192.168.57.114", 1337)
     else:
-        host, port = sys.argv[1], int(sys.argv[2])
+        host, port = (sys.argv[1], int(sys.argv[2]))
 
     main(host, port)

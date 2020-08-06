@@ -24,6 +24,8 @@ GENERIC_READ = 0x80000000
 GENERIC_WRITE = 0x40000000
 OPEN_EXISTING = 3
 
+RPYC_DEFAULT_PORT = 18812
+
 Irp = collections.namedtuple(
     "Irp",
     [
@@ -128,7 +130,7 @@ def MutateFuzzQword(data: bytearray) -> bytearray:
 
     for offset in range(0, len(data), 8):
         fuzzed_data = data[::]
-        dbg("Fuzzing QWORD at offset %d" % (offset,))
+        #dbg("Fuzzing QWORD at offset %d" % (offset,))
         struct.pack_into("<Q", fuzzed_data, offset, 0x4141414141414141)
         yield fuzzed_data
         struct.pack_into("<Q", fuzzed_data, offset, 0xffffffffffffffff)
@@ -161,12 +163,25 @@ def FuzzIoctl(remote: rpyc.core.protocol.Connection, entry: Irp) -> int:
     DeviceName = entry.DeviceName.lower().replace(r"\device", r"\\.")
     IoctlCode = entry.IoctlCode
     lpIrpDataOut = b"\x00"*entry.OutputBufferLength
-    ok("Fuzzing IOCTL IRP #%d" % (entry.Id,))
+    ok(f"Fuzzing IOCTL IRP #{entry.Id} for '{DeviceName}'")
     for mutated_data in Mutate(entry.InputBuffer):
         lpIrpDataIn = bytes(mutated_data)
         #os.system("clear")
         #hexdump.hexdump(lpIrpDataIn)
-        DeviceIoctlControl(remote, DeviceName, IoctlCode, lpIrpDataIn, lpIrpDataOut)
+        try:
+            DeviceIoctlControl(remote, DeviceName, IoctlCode, lpIrpDataIn, lpIrpDataOut)
+        except Exception as e:
+            msg = str(e)
+            err(f"Exception: {msg}")
+            if msg == "result expired":
+                # probably a bsod, dump the info
+                warn(f"dumping active IRP '{DeviceName}' -> {IoctlCode:x} input data:")
+                hexdump.hexdump(lpIrpDataIn)
+                if input("Continue (y/N)?").strip().lower() != "y":
+                    exit(1)
+            else:
+                raise e
+
 
 
 def FuzzWrite(remote: rpyc.core.protocol.Connection, entry: Irp) -> int:
@@ -187,8 +202,8 @@ def AutoFuzzIoctl(conn: rpyc.core.protocol.Connection, db_path: str) -> None:
         try:
             FuzzIoctl(conn, irp)
         except Exception as e:
-            err("Exception: %s" % str(e))
-            #break
+            msg = str(e)
+            err(f"Exception: {msg}")
             pass
     sql.close()
     return
@@ -203,14 +218,14 @@ def AutoFuzzWrite(conn: rpyc.core.protocol.Connection, db_path: str) -> None:
         try:
             FuzzWrite(conn, irp)
         except Exception as e:
-            err("Exception: %s" % str(e))
-            #break
+            msg = str(e)
+            err(f"Exception: {msg}")
             pass
     sql.close()
     return
 
 
-def Connect(host: str, port:int = 18812) -> rpyc.core.protocol.Connection:
+def Connect(host: str, port:int = RPYC_DEFAULT_PORT) -> rpyc.core.protocol.Connection:
     global ntdll, kernel32, c_uint32, GetLastError, FormatError, create_string_buffer, byref
     conn = rpyc.classic.connect(host, port)
     conn.execute("from ctypes import *")
@@ -226,8 +241,17 @@ def Connect(host: str, port:int = 18812) -> rpyc.core.protocol.Connection:
 
 
 if __name__ == '__main__':
+    if len(sys.argv) != 3:
+        print(f"syntax: {sys.argv[0]} DB_PATH FUZZ_TARGET")
+        exit(1)
+
     sqlite_file = sys.argv[1]
     target_fuzz = sys.argv[2]
-    conn = Connect(target_fuzz)
-    #AutoFuzzIoctl(conn, sqlite_file)
-    AutoFuzzWrite(conn, sqlite_file)
+    if ":" in target_fuzz:
+        target_host, target_port = target_fuzz.split(":", 1)
+    else:
+        target_host, target_port = target_fuzz, RPYC_DEFAULT_PORT
+
+    conn = Connect(target_host, target_port)
+    AutoFuzzIoctl(conn, sqlite_file)
+    #AutoFuzzWrite(conn, sqlite_file)

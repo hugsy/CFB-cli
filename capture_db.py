@@ -9,7 +9,7 @@ This shouldn't be used in other cases than testing.
 """
 
 from enum import Enum, unique
-
+from multiprocessing import Process
 import base64, json, pprint, sys, time, socket, datetime, struct, sqlite3, os, hexdump
 
 MAX_MESSAGE_SIZE = 65536
@@ -150,24 +150,31 @@ class BrokerSession:
     def EnumerateDrivers(self):
         js = self.sr(TaskType.EnumerateDrivers)
         ok("EnumerateDrivers -> " + json.dumps(js, indent=4, sort_keys=True))
+        return js
 
     def HookDriver(self, driver_name):
         lpszDriverName = driver_name.encode("utf-16")[2:]
         res = self.sr(TaskType.HookDriver, lpszDriverName)
-        ok("hook -> " + json.dumps(res, indent=4, sort_keys=True))
+        js = json.dumps(res, indent=4, sort_keys=True)
+        ok(f"hook -> {js}")
+        return js
 
     def UnhookDriver(self, driver_name):
         lpszDriverName = driver_name.encode("utf-16")[2:]
         res = self.sr(TaskType.UnhookDriver, lpszDriverName)
-        ok("unhook -> " + json.dumps(res, indent=4, sort_keys=True))
+        js = json.dumps(res, indent=4, sort_keys=True)
+        ok(f"unhook -> {js}")
+        return js
 
     def EnableMonitoring(self):
         res = self.sr(TaskType.EnableMonitoring)
         ok("enable_monitoring -> " + json.dumps(res, indent=4, sort_keys=True))
+        return res
 
     def DisableMonitoring(self):
         res = self.sr(TaskType.DisableMonitoring)
         ok("disable_monitoring -> " + json.dumps(res, indent=4, sort_keys=True))
+        return res
 
     def GetInterceptedIrps(self):
         res = self.sr(TaskType.GetInterceptedIrps)
@@ -177,8 +184,6 @@ class BrokerSession:
             res["body"]["entries"][i]["header"]["DriverName"] = "{}".format("".join(map(chr, res["body"]["entries"][i]["header"]["DriverName"])))
             res["body"]["entries"][i]["header"]["ProcessName"] = "{}".format("".join(map(chr, res["body"]["entries"][i]["header"]["ProcessName"])))
         return res
-
-
 
 
 
@@ -209,7 +214,6 @@ class BrokerTcpSession(BrokerSession):
         signal.alarm(self.dwTimeout)
         res = b""
         while True:
-            # fucking ip fragmentation
             res += self.hSock.recv(MAX_MESSAGE_SIZE)
             assert res is not None
             res = res[::]
@@ -301,7 +305,7 @@ def run_forever(r):
 def capture(r, driver_list):
     r.OpenPipe()
     #r.EnumerateDrivers()
-    #for driver_name in driver_list: r.HookDriver(driver_name)
+    for driver_name in driver_list: r.HookDriver(driver_name)
 
     r.EnableMonitoring()
     #ok("EnableMonitoring() success")
@@ -312,7 +316,7 @@ def capture(r, driver_list):
     r.DisableMonitoring()
     #ok("DisableMonitoring() success")
 
-    for driver_name in driver_list: 
+    for driver_name in driver_list:
         r.UnhookDriver(driver_name)
 
     #ok("UnhookDriver() success")
@@ -348,17 +352,13 @@ if __name__ == '__main__':
         #"\\driver\\vmssp\0",
         #"\\driver\\vmsproxy\0",
 
-        ## hmp
-        # "\\driver\\hmpalert\0",
-        # "\\driver\\hitmanpro37\0",
-
         ## iobit mf
         # "\\filesystem\\IMFDownProtect\0",
         # "\\filesystem\\IMFFilter\0",
         # "\\driver\\IMFObCallback\0",
         # "\\driver\\IMFForceDelete\0",
 
-        ## sav
+        ## sav & hmp
         "\\driver\\hitmanpro37\0",
         "\\driver\\hmpalert\0",
         "\\driver\\hmpnet\0",
