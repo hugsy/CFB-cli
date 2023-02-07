@@ -175,7 +175,7 @@ def FuzzIoctl(remote: rpyc.core.protocol.Connection, entry: Irp) -> int:
             err(f"Exception: {msg}")
             if msg == "result expired":
                 # probably a bsod, dump the info
-                warn(f"dumping active IRP '{DeviceName}' -> {IoctlCode:x} input data:")
+                warn(f"dumping active IRP #{entry.Id} for '{DeviceName}' -> {IoctlCode:x}, input data:")
                 hexdump.hexdump(lpIrpDataIn)
                 if input("Continue (y/N)?").strip().lower() != "y":
                     exit(1)

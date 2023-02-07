@@ -1,3 +1,5 @@
 requests
 hexdump
 rpyc
+prompt_toolkit
+rich
